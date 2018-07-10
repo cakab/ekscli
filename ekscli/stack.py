@@ -52,9 +52,6 @@ class Resource:
         self.status = status
         self.resource_id = resource_id
 
-    def __copy__(self):
-        return type(self)(self.name, self.description, self.status, self.resource_id)
-
 
 class ClusterInfo:
     def __init__(self, name, endpoint=None, cert=None, vpc=None, subnets=[], sg=None):
@@ -107,7 +104,7 @@ class ControlPlane:
     OUTPUT_VPC = RESOURCE_EKS_VPC.name
     OUTPUT_SUBNETS = 'EKSSubnets'
 
-    TAG_CLUSTER = 'eks.k8s.io/cluster'
+    CLUSTER_TAG = 'kubernetes.io/cluster/{}'
 
     def __init__(self, name, role=None, subnets=None, region=None, kube_ver=None, tags=[],
                  vpc_cidr=None, zones=None):
@@ -116,7 +113,7 @@ class ControlPlane:
         self.tag_name = 'eks.{}.cp'.format(name)
         self.subnets = subnets
         self.tags = dict(t.split('=') for t in tags)
-        self.tags.update({'Name': self.tag_name, self.TAG_CLUSTER: self.name})
+        self.tags.update({'Name': self.tag_name, self.CLUSTER_TAG.format(self.name): 'owned'})
         self.vpc = None
         self.role = role
         self.region = region.lower() if region else boto3.session.Session().region_name
@@ -153,17 +150,17 @@ class ControlPlane:
 
         stacks = self.get_all_stacks()
         for s in stacks:
-            for t in s.tags:
-                if t.get('Key') == NodeGroup.TAG_NODEGROUP:
-                    NodeGroup(name=t.get('Value'), cluster_info=ci).delete(stack=s)
-                    break
+            tags = {t.get('Key'): t.get('Value') for t in s.tags}
+            if ControlPlane.CLUSTER_TAG.format(self.name) in tags and NodeGroup.NODEGROUP_TAG in tags:
+                NodeGroup(name=tags.get(NodeGroup.NODEGROUP_TAG), cluster_info=ci).delete(stack=s)
 
-        resources = [self.RESOURCE_EKS_CLUSTER, self.RESOURCE_CP_SG, self.RESOURCE_CP_ROLE]
+        resources = deepcopy([self.RESOURCE_EKS_CLUSTER, self.RESOURCE_CP_SG, self.RESOURCE_CP_ROLE])
         for i, subnet in enumerate(ci.subnets):
             sname = self.RESOURCE_FORMAT_SUBNET.format(i + 1)
             resources.append(Resource(sname, 'EKS VPC {}'.format(sname), Status.created, subnet))
-        self.RESOURCE_EKS_VPC.resource_id = ci.vpc
-        resources.append(self.RESOURCE_EKS_VPC)
+        vpc_resource = copy(self.RESOURCE_EKS_VPC)
+        vpc_resource.resource_id = ci.vpc
+        resources.append(vpc_resource)
         for r in resources:
             r.status = Status.created
 
@@ -192,11 +189,11 @@ class ControlPlane:
     def get_all_stacks(self):
         cf = boto3.session.Session().resource('cloudformation')
         return [s for s in cf.stacks.all() for t in s.tags
-                if t.get('Key') == self.TAG_CLUSTER and t.get('Value') == self.name]
+                if t.get('Key') == self.CLUSTER_TAG.format(self.name) and t.get('Value') == 'owned']
 
     def get_all_nodegroup_stacks(self):
         return {t.get('Value'): s for s in self.get_all_stacks() for t in s.tags
-                if t.get('Key') == NodeGroup.TAG_NODEGROUP}
+                if t.get('Key') == NodeGroup.NODEGROUP_TAG}
 
     @staticmethod
     def _stack_to_cluster_info(name, outputs):
@@ -470,7 +467,7 @@ class NodeGroup:
 
     OUTPUT_KEYNAME = 'KeyName'
 
-    TAG_NODEGROUP = 'k8s.io/cluster-autoscaler/node-template/label/ng'
+    NODEGROUP_TAG = 'k8s.io/cluster-autoscaler/node-template/label/ng'
 
     DEFAULT_AMI = {'us-east-1': 'ami-dea4d5a1', 'us-west-2': 'ami-73a6e20b'}
     USER_DATA = textwrap.dedent('''\
@@ -534,8 +531,8 @@ class NodeGroup:
         self.stack_name = 'eks-{}-ng-{}'.format(self.cluster.name, self.name)
         self.tags = tags
         self.tags.update({'Name': self.tag_name,
-                          ControlPlane.TAG_CLUSTER: self.cluster.name,
-                          self.TAG_NODEGROUP: self.name})
+                          ControlPlane.CLUSTER_TAG.format(self.cluster.name): 'owned',
+                          self.NODEGROUP_TAG: self.name})
         self.region = region
         self.role = role
         self.sg_igresses = sg_ingresses
