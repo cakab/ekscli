@@ -107,12 +107,6 @@ To create a node group with more options
       --keyname dev \
       --tags Env=dev,Project=eks-poc
 
-To activate Bash auto-completion for ekscli
-
-.. code-block:: bash
-
-    $ eval "$(_EKS_COMPLETE=source eks)"
-
 --------
 Features
 --------
