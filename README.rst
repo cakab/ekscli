@@ -82,8 +82,6 @@ To create the EKS cluster's control plane (master) with existing subnets of a VP
       --region us-west-2 \
       --kubconfig ./dev.conf \
       --heptio-auth /tmp/heptio-auth-aws \
-      --keyname dev \
-      --node-sg-ingress port=22,cidr=10.0.0.0/8 \
       --tags Env=dev,Project=eks-poc
 
 The simplest way to create a node group
