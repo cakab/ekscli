@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import boto3
 import yaml
 from mock import patch
 from moto import mock_cloudformation, mock_ec2, mock_sts
@@ -48,6 +49,7 @@ def test_create_control_plane():
 @patch.object(ekscli.stack.ControlPlane, '_create_eks_cluster_template', skip_cluster)
 @patch.object(ekscli.stack.NodeGroup, '_update_configmap', skip_configmap)
 def test_create_cluster(tmpdir):
+    boto3.setup_default_session(region_name='us-east-1')
     cp = ControlPlane('test', role='eks-test', region='us-east-1')
     ci = cp.create()
 
