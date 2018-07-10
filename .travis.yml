@@ -1,5 +1,7 @@
 # Config file for automatic testing at travis-ci.org
-
+env:
+  global:
+  - AWS_DEFAULT_REGION = us-east-1
 language: python
 python:
   - 3.6
