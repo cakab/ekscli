@@ -11,6 +11,7 @@ from ekscli.utils import Status
 
 cluster_endpoint = 'https://test.sk1.us-east-1.eks.amazonaws.com'
 cluster_ca = 'BASE64STR'
+boto3.setup_default_session(region_name='us-east-1')
 
 
 def skip_cluster(self, cp_sg, role_arn):
@@ -20,14 +21,6 @@ def skip_cluster(self, cp_sg, role_arn):
 
 def skip_configmap(kubeconf, role):
     pass
-
-
-@mock_cloudformation
-def test_load_kubeconf():
-    ci = ClusterInfo('poc', 'https://eks.awsamazon.com', '12345', vpc='vpc-12343565', sg='sg-123456',
-                     subnets=['subnet-123435', 'subnet-234556'])
-    ng = NodeGroup('nodes', cluster_info=ci, ami='ami-123456', keypair='test')
-    ng.create()
 
 
 @mock_cloudformation
@@ -49,7 +42,6 @@ def test_create_control_plane():
 @patch.object(ekscli.stack.ControlPlane, '_create_eks_cluster_template', skip_cluster)
 @patch.object(ekscli.stack.NodeGroup, '_update_configmap', skip_configmap)
 def test_create_cluster(tmpdir):
-    boto3.setup_default_session(region_name='us-east-1')
     cp = ControlPlane('test', role='eks-test', region='us-east-1')
     ci = cp.create()
 
