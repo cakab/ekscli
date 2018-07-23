@@ -4,6 +4,7 @@ from __future__ import absolute_import
 import logging
 import os
 import random
+import re
 import string
 import textwrap
 from collections import OrderedDict
@@ -104,6 +105,7 @@ class ControlPlane:
     OUTPUT_VPC = RESOURCE_EKS_VPC.name
     OUTPUT_SUBNETS = 'EKSSubnets'
 
+    CLUSTER_TAG_PATTERN = re.compile(r'kubernetes.io/cluster/(.*)')
     CLUSTER_TAG = 'kubernetes.io/cluster/{}'
 
     def __init__(self, name, role=None, subnets=None, region=None, kube_ver=None, tags=[],
@@ -523,7 +525,7 @@ class NodeGroup:
 
     def __init__(self, name, cluster_info=None, region=None, subnets=[], tags={}, min_nodes=1, max_nodes=3,
                  role=None, sg_ingresses=[], desired_nodes=1, ami=None, instance_type='m4.large', ssh_public_key=None,
-                 keypair=None, kubeconf=None):
+                 keypair=None, kubeconf=None, no_user_data=False):
         self.cluster = cluster_info
         self.subnets = subnets or self.cluster.subnets if self.cluster else []
         self.name = name
@@ -549,6 +551,7 @@ class NodeGroup:
         self.use_public_ip = False
         self.kubeconf = kubeconf
         self.resources = None
+        self.no_user_data = no_user_data
 
     def create(self):
         self._validate_creation()
@@ -646,7 +649,7 @@ class NodeGroup:
             images = list(ec2.images.filter(Owners=[owner], Filters=[{'Name': 'name', 'Values': [name]}]))
             if not images:
                 raise EKSCliException('image [{}] does not exist.'.format(self.ami))
-            self.ami = images[0]
+            self.ami = images[0].id
         else:
             image = ec2.Image(self.ami)
             if not image:
@@ -670,7 +673,6 @@ class NodeGroup:
 
         eks_tag = 'kubernetes.io/cluster/{}'.format(self.cluster.name)
 
-        # r = copy(self.RESOURCE_NG_ROLE)
         r = self.resources.get(self.RESOURCE_NG_ROLE.name)
         if self.role:
             profile = InstanceProfile(
@@ -698,7 +700,6 @@ class NodeGroup:
                 Output(self.RESOURCE_NG_ROLE.name, Value=GetAtt(role, 'Arn'), Description='Node group role'))
 
         self.tpl.add_resource(profile)
-        # self.resources.extend([r, copy(self.RESOURCE_NG_PROFILE)])
 
         if self.sg_igresses:
             sg = SecurityGroup(
@@ -752,20 +753,26 @@ class NodeGroup:
             r.status = Status.provided
 
         r.resource_id = self.keypair
-        # self.resources.insert(0, r)
 
         # auto-scaling group and launch configuration
-        userdata = [line + '\n' for line in
-                    Environment().from_string(self.USER_DATA).render(
-                        ci=self.cluster, ng_asg=self.RESOURCE_NG_ASG.name, stack_name=self.stack_name,
-                        max_pods=self.MAX_PODS.get(self.instance), region=self.region).split('\n')]
+        if self.no_user_data:
+            lc = LaunchConfiguration(
+                self.RESOURCE_NG_ASG_LC.name, AssociatePublicIpAddress=self.use_public_ip,
+                IamInstanceProfile=Ref(profile),
+                ImageId=self.ami, InstanceType=self.instance, KeyName=self.keypair, SecurityGroups=[Ref(sg)])
+        else:
+            user_data = Base64(
+                Join('', [line + '\n' for line in
+                          Environment().from_string(self.USER_DATA).render(
+                              ci=self.cluster, ng_asg=self.RESOURCE_NG_ASG.name, stack_name=self.stack_name,
+                              max_pods=self.MAX_PODS.get(self.instance), region=self.region).split('\n')]))
+            lc = LaunchConfiguration(
+                self.RESOURCE_NG_ASG_LC.name, AssociatePublicIpAddress=self.use_public_ip,
+                IamInstanceProfile=Ref(profile),
+                ImageId=self.ami, InstanceType=self.instance, KeyName=self.keypair, SecurityGroups=[Ref(sg)],
+                UserData=user_data)
 
-        lc = LaunchConfiguration(
-            self.RESOURCE_NG_ASG_LC.name, AssociatePublicIpAddress=self.use_public_ip, IamInstanceProfile=Ref(profile),
-            ImageId=self.ami, InstanceType=self.instance, KeyName=self.keypair, SecurityGroups=[Ref(sg)],
-            UserData=Base64(Join('', userdata)))
         self.tpl.add_resource(lc)
-
         self.tpl.add_resource(AutoScalingGroup(
             self.RESOURCE_NG_ASG.name, DesiredCapacity=self.desired, MinSize=self.min, MaxSize=self.max,
             LaunchConfigurationName=Ref(lc), VPCZoneIdentifier=self.subnets,
@@ -789,7 +796,7 @@ class NodeGroup:
             cf = boto3.session.Session().resource('cloudformation')
             stack = cf.Stack(self.stack_name)
 
-        odict = {o.get('OutputKey'): o.get('OutputValue') for o in stack.outputs}
+        odict = {o.get('OutputKey'): o.get('OutputValue') for o in stack.outputs or []}
         key_name = odict.get(self.OUTPUT_KEYNAME)
 
         self._init_resources()

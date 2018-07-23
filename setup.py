@@ -23,7 +23,8 @@ requirements = ['click>=6.0',
                 'oyaml>=0.4',
                 'jinja2>=2.10',
                 'netaddr>=0.7.19',
-                'tabulate>=0.8.2'
+                'tabulate>=0.8.2',
+                'ec2-metadata>=1.6.0'
                 ]
 
 setup_requirements = ['pytest-runner', ]

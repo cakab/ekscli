@@ -15,6 +15,7 @@ from future.utils import iteritems
 from tabulate import tabulate
 
 import ekscli
+from ekscli.bootstrap import Kubelet
 from ekscli.stack import ControlPlane, KubeConfig, NodeGroup, ClusterInfo, AWSSecurityGroupRule
 from ekscli.thirdparty.click_alias import ClickAliasedGroup
 from ekscli.utils import which, MutuallyExclusiveOption
@@ -112,7 +113,8 @@ def validate_heptio_authenticator(ctx, param, value):
 def common_options(func):
     @click.option('--name', '-n', envvar='EKS_CLUSTER_NAME', required=True,
                   help='A regional unique name of the EKS cluster. Overrides EKS_CLUSTER_NAME environment variable.')
-    @click.option('--region', type=str, callback=validate_region, help='The AWS region to create the EKS cluster.')
+    @click.option('--region', '-r', type=str, callback=validate_region,
+                  help='The AWS region to create the EKS cluster.')
     @click.option('-v', '--verbosity', callback=config_logger, count=True,
                   help='Log level; -v for WARNING, -vv INFO,  -vvv DEBUG and -vvvv NOTSET.')
     @functools.wraps(func)
@@ -132,7 +134,7 @@ def eks(ctx):
 @eks.command()
 def version():
     """Show the EKS cli version info"""
-    print('Version '.format(ekscli.__version__))
+    print('Version {}'.format(ekscli.__version__))
 
 
 @eks.group(invoke_without_command=True, no_args_is_help=True, cls=ClickAliasedGroup,
@@ -162,6 +164,33 @@ def delete(ctx):
 def export(ctx):
     """Export configuration from an EKS cluster"""
     pass
+
+
+@eks.command()
+@click.option('--cluster-name', '-n', type=str, help='EKS cluster name')
+@click.option('--region', '-r', type=str, help='AWS region')
+@click.option('--max-pods', '-m', type=int, help='Max number pods able to run on the node.')
+@click.option('--node-ip', '-i', type=str, help='Node internal IP')
+@click.option('--kubelet-opt', '-o', type=str, multiple=True, help='kubelet options')
+@click.option('--kubelet-exec', '-e', type=str, help='kubelet executor file location', default='/usr/bin/kubelet',
+              show_default=True)
+@click.option('--kubelet-svc', '-s', type=str, help='kubelet service file location',
+              default='/etc/systemd/system/kubelet.service', show_default=True)
+@click.option('--kubeconf', '-k', type=str, help='kube-config file location', default='/var/lib/kubelet/kubeconfig',
+              show_default=True)
+@click.option('--cert', '-c', type=str, help='CA cert file location', default='/etc/kubernetes/pki/ca.crt',
+              show_default=True)
+@click.option('--dry-run', '-d', is_flag=True, default=False,
+              help='If true, only print the artifacts that could be written to files.')
+@click.pass_context
+def bootstrap(ctx, cluster_name, region, max_pods, node_ip, kubelet_opt, kubelet_exec, kubelet_svc, kubeconf, cert,
+              dry_run):
+    """Configure and bootstrap kubelet on worker nodes"""
+    opts = {v[0]: v[1] for v in [k if len(k) > 1 else k.append('') for k in [o.split('=', 1) for o in kubelet_opt]]}
+    kubelet = Kubelet(cluster_name=cluster_name, region=region, max_pods=max_pods, ip=node_ip, kubeconf_file=kubeconf,
+                      cert_file=cert, kubelet_opts=opts, kubelet_exec_file=kubelet_exec, kubelet_svc_file=kubelet_svc,
+                      dry_run=dry_run)
+    kubelet.bootstrap()
 
 
 @create.command(name='cluster')
@@ -194,6 +223,8 @@ def export(ctx):
               mutex_group=['cp_only', 'node-max'], help='The max size of the node group')
 @click.option('--node-subnets', type=str, callback=validate_subnetes,
               help='The existing subnets to create node groups. Default, all subnets where EKS cluster is deployed.')
+@click.option('--node-type', type=str, cls=MutuallyExclusiveOption, mutex_group=['cp_only', 'node-type'],
+              help='Node group instance type.')
 @click.option('--keyname', type=str, cls=MutuallyExclusiveOption, mutex_group=['cp_only', 'keyname', 'ssh_public_key'],
               help='To use an existing keypair name in AWS for node groups')
 @click.option('--ssh-public-key', type=str, cls=MutuallyExclusiveOption,
@@ -201,11 +232,16 @@ def export(ctx):
               help='To create a keypair used by node groups with an existing SSH public key.')
 @click.option('--ami', type=str, cls=MutuallyExclusiveOption, mutex_group=['cp_only', 'ami'],
               help='AWS AMI id or location')
+@click.option('--no-user-data', cls=MutuallyExclusiveOption, mutex_group=['cp_only', 'no_user_data'],
+              is_flag=True, default=False,
+              help='Not use the user data in NodeGroup LaunchConfiguration, '
+                   'instead ekscli-boostrap alike for node discovery.')
 @click.option('--yes', '-y', is_flag=True, default=False, help='Run ekscli without any confirmation prompt.')
 @click.pass_context
 def create_cluster(ctx, name, region, verbosity,
                    cp_role, subnets, tags, vpc_cidr, zones, kubeconf, username, heptio_auth, cp_only, node_name,
-                   node_role, node_sg_ingress, node_min, node_max, node_subnets, keyname, ssh_public_key, ami, yes):
+                   node_role, node_sg_ingress, node_min, node_max, node_subnets, node_type, keyname, ssh_public_key,
+                   ami, no_user_data, yes):
     """Create an EKS cluster"""
     if node_subnets and not subnets:
         print('If node subnets are specified, the cluster subnets must appear!')
@@ -236,7 +272,8 @@ def create_cluster(ctx, name, region, verbosity,
 
     ng = NodeGroup(node_name, cluster_info=cluster_info, keypair=keyname, region=region, ami=ami, subnets=node_subnets,
                    kubeconf=kubeconf, role=node_role, sg_ingresses=node_sg_ingress, min_nodes=node_min,
-                   max_nodes=node_max, ssh_public_key=ssh_public_key)
+                   max_nodes=node_max, instance_type=node_type, ssh_public_key=ssh_public_key,
+                   no_user_data=no_user_data)
     ng.create()
 
 
@@ -268,18 +305,25 @@ def export_kubeconfig(ctx, name, region, verbosity, kubeconf, username, heptio_a
               help='Additional security group ingresses for the node group')
 @click.option('--node-min', type=int, default=1, help='The min size of the node group')
 @click.option('--node-max', type=int, default=3, help='The max size of the node group')
+@click.option('--node-type', type=str, help='Node group instance type.')
+@click.option('--node-role', type=str, help='Additional roles for the node group')
 @click.option('--node-subnets', type=str, callback=validate_subnetes,
-              help='The existing subnets to create this node groups.')
+              help='The existing subnets to create node groups. Default, all subnets where EKS cluster is deployed.')
 @click.option('--keyname', type=str, help='To use an existing keypair name in AWS for node groups',
               cls=MutuallyExclusiveOption, mutex_group=['keyname', 'ssh_public_key'])
 @click.option('--ssh-public-key', type=str,
               help='To create a keypair used by node groups with an existing SSH public key.',
               cls=MutuallyExclusiveOption, mutex_group=['keyname', 'ssh_public_key'])
 @click.option('--ami', type=str, help='AWS AMI id or location')
+@click.option('--bootstrap-opt', '-b', type=str, multiple=True,
+              help='Options for ekscli bootstrap. See ekscli bootstrap --help.')
+@click.option('--no-user-data', type=str, is_flag=True, default=False,
+              help='Not use the user data in NodeGroup LaunchConfiguration, instead ekstrap alike for node discovery.')
 @click.option('--yes', '-y', is_flag=True, default=False, help='Run ekscli without any confirmation prompt.')
 @click.pass_context
 def create_nodegroup(ctx, name, node_name, region, verbosity, node_subnets, tags, kubeconf, node_min, node_max,
-                     node_role, node_sg_ingress, keyname, ssh_public_key, ami, yes):
+                     node_role, node_type, node_sg_ingress, keyname, ssh_public_key, ami, bootstrap_opt, no_user_data,
+                     yes):
     """Create a node group in an existing EKS cluster"""
     cp = ControlPlane(name, region=region)
     cluster_info = cp.query()
@@ -293,7 +337,8 @@ def create_nodegroup(ctx, name, node_name, region, verbosity, node_subnets, tags
                 exit(0)
     ng = NodeGroup(node_name, cluster_info=cluster_info, region=region, ami=ami, keypair=keyname, subnets=node_subnets,
                    role=node_role, sg_ingresses=node_sg_ingress, ssh_public_key=ssh_public_key, tags=tags,
-                   kubeconf=kubeconf, min_nodes=node_min, max_nodes=node_max)
+                   kubeconf=kubeconf, min_nodes=node_min, max_nodes=node_max, instance_type=node_type,
+                   no_user_data=no_user_data)
     ng.create()
 
 

@@ -82,6 +82,8 @@ To create the EKS cluster's control plane (master) with existing subnets of a VP
       --region us-west-2 \
       --kubconfig ./dev.conf \
       --heptio-auth /tmp/heptio-auth-aws \
+      --keyname dev \
+      --node-sg-ingress port=22,cidr=10.0.0.0/8 \
       --tags Env=dev,Project=eks-poc
 
 The simplest way to create a node group
@@ -107,6 +109,41 @@ To create a node group with more options
       --keyname dev \
       --tags Env=dev,Project=eks-poc
 
+To help bootstrapping kubelet agent
+
+.. code-block:: bash
+
+    # on EC2 worker instances, after copying kubelet, cni, heptio-aws-authenticator executables
+    $ eks bootstrap -o node-labels=gpu=enable,role=node \
+      -o feature-gates=RotateKubeletServerCertificate=true,CRIContainerLogRotation=true
+    $ systemctl daemon-reload
+    $ systemctl enable kubelet.service
+
+To display files created by ekscli boostrap locally rather than on EC2 instances
+
+.. code-block:: bash
+
+    # on EC2 instances
+    $ eks bootstrap --dry-run -n poc -r us-east-1 -m 32 \
+      -o node-labels=gpu=enable,role=node \
+      -o feature-gates=RotateKubeletServerCertificate=true,CRIContainerLogRotation=true
+
+To use ekscli boostrap as oneshot systemd unit
+
+.. code-block:: linux-config
+
+    [Unit]
+    Description=Configures Kubelet for EKS worker nodes
+    Before=kubelet.service
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/local/bin/ekscli bootstrap
+    RemainAfterExit=true
+
+    [Install]
+    WantedBy=multi-user.target
+
 --------
 Features
 --------
@@ -116,6 +153,7 @@ Features
 * Plain vanilla EKS cluster without unrequired resources running Kubernetes clusters
 * EKS resources managed by AWS `CloudFormation <https://aws.amazon.com/cloudformation/>`_
 * Command line auto-completion supported for Bash and Zsh
+* Prepare necessary configuration for kubelet with self cluster discovery and additional options on worker nodes
 
 --------
 Roadmap
