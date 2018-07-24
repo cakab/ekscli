@@ -123,8 +123,8 @@ To display files created by ekscli boostrap locally rather than on EC2 instances
 
 .. code-block:: bash
 
-    # on EC2 instances
-    $ eks bootstrap --dry-run -n poc -r us-east-1 -m 32 \
+    # on local machine 
+    $ eks bootstrap --dry-run -n poc -r us-east-1 -m 32 -i 127.0.0.1 \
       -o node-labels=gpu=enable,role=node \
       -o feature-gates=RotateKubeletServerCertificate=true,CRIContainerLogRotation=true
 
