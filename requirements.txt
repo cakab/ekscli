@@ -7,7 +7,7 @@ boto3==1.7.57
 halo==0.0.12
 kubernetes==6.0.0
 oyaml==0.4
-jinja2==2.10
+jinja2==2.11.3
 netaddr==0.7.19
 tabulate==0.8.2
 ec2-metadata==1.6.0
